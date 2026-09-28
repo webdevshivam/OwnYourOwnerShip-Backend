@@ -2,7 +2,9 @@ using Autofac;
 using Autofac.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
+using Tracker.App.Common.Hangfire;
 using Tracker.App.Common.IoC;
+using Tracker.App.Common.Webhooks;
 using Tracker.App.Data;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -35,6 +37,12 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
     return ConnectionMultiplexer.Connect(configuration);
 });
 
+// Configure Hangfire with PostgreSQL Storage & Background Workers
+builder.Services.AddHangfireConfiguration(builder.Configuration);
+
+// Configure Webhook Services & Resilient HttpClient
+builder.Services.AddWebhookServices();
+
 // ==========================================
 // 3. Autofac Container Registrations
 // ==========================================
@@ -58,6 +66,9 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 app.UseAuthorization();
+
+// Hangfire Dashboard (available at /hangfire)
+app.UseHangfireDashboardCustom();
 
 app.MapControllers();
 
