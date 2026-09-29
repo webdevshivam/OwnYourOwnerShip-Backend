@@ -1,9 +1,17 @@
+using System.Text;
 using Autofac;
 using Autofac.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi;
 using StackExchange.Redis;
+using Tracker.App.Common.Auth;
+using Tracker.App.Common.Constants;
 using Tracker.App.Common.Hangfire;
 using Tracker.App.Common.IoC;
+using Tracker.App.Common.Models;
 using Tracker.App.Common.Webhooks;
 using Tracker.App.Data;
 
@@ -17,9 +25,82 @@ builder.Host.UseServiceProviderFactory(new AutofacServiceProviderFactory());
 // ==========================================
 // 2. Framework & ASP.NET Core Services
 // ==========================================
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .ConfigureApiBehaviorOptions(options =>
+    {
+        // Enforce consistent ApiResponse envelope for automatic model validation errors (400 Bad Request)
+        options.InvalidModelStateResponseFactory = context =>
+        {
+            var errors = context.ModelState
+                .Where(e => e.Value?.Errors.Count > 0)
+                .SelectMany(kvp => kvp.Value!.Errors.Select(err => new ValidationErrorDetail(
+                    Field: kvp.Key,
+                    Message: string.IsNullOrWhiteSpace(err.ErrorMessage) ? ApiConstants.InvalidValueMessage : err.ErrorMessage
+                )))
+                .ToList();
+
+            var response = ApiResponse.Fail(ApiConstants.ValidationFailedMessage, StatusCodes.Status400BadRequest, errors);
+            return new BadRequestObjectResult(response);
+        };
+    });
+
+builder.Services.AddRouting(options =>
+{
+    options.LowercaseUrls = true;
+    options.LowercaseQueryStrings = true;
+});
+
+// Configure JWT Options
+builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
+var jwtSettings = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
+
+// Configure JWT Bearer Authentication
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.RequireHttpsMetadata = false;
+        options.SaveToken = true;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtSettings.Issuer,
+            ValidAudience = jwtSettings.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Secret)),
+            ClockSkew = TimeSpan.Zero
+        };
+    });
+
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Tracker API",
+        Version = "v1",
+        Description = "Production-grade backend API for Tracker.App"
+    });
+
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.Http,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Enter your JWT Bearer token: Bearer {token}"
+    });
+
+    options.AddSecurityRequirement(_ => new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecuritySchemeReference("Bearer"),
+            new List<string>()
+        }
+    });
+});
 
 // Configure PostgreSQL Database Context
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -65,11 +146,15 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 // Hangfire Dashboard (available at /hangfire)
 app.UseHangfireDashboardCustom();
 
 app.MapControllers();
+
+// Seed default test user in development
+await app.SeedDevelopmentDataAsync();
 
 app.Run();

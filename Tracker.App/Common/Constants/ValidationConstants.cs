@@ -51,8 +51,15 @@ public static class ValidationConstants
     // Friendly Validation Error Messages
     // ==========================================
     
-    public const string InvalidEmailErrorMessage = "Please provide a valid email address.";
-    public const string InvalidHexColorErrorMessage = "Color must be a valid hex code (e.g., #3B82F6).";
-    public const string WeakPasswordErrorMessage = "Password must be at least 8 characters long and contain uppercase, lowercase, and numeric characters.";
     public const string RequiredFieldErrorMessage = "This field is required.";
+    public const string EmailRequiredErrorMessage = "Email is required.";
+    public const string InvalidEmailErrorMessage = "Please provide a valid email address.";
+    public const string EmailMaxLengthErrorMessage = "Email cannot exceed 255 characters.";
+    public const string PasswordRequiredErrorMessage = "Password is required.";
+    public const string PasswordMinLengthErrorMessage = "Password must be at least 6 characters long.";
+    public const string WeakPasswordErrorMessage = "Password must be at least 8 characters long and contain uppercase, lowercase, and numeric characters.";
+    public const string InvalidCredentialsErrorMessage = "Invalid email or password.";
+    public const string AccountLockedErrorMessage = "User account is temporarily locked out due to multiple failed login attempts.";
+    public const string AccountInactiveErrorMessage = "User account is deactivated. Please contact support.";
+    public const string InvalidHexColorErrorMessage = "Color must be a valid hex code (e.g., #3B82F6).";
 }
