@@ -1,4 +1,7 @@
 using Autofac;
+using Tracker.App.Features.Auth.Interface;
+using Tracker.App.Features.Auth.Repository;
+using Tracker.App.Features.Auth.Service;
 using Tracker.App.Services;
 
 namespace Tracker.App.Common.IoC;
@@ -19,11 +22,17 @@ public class ApplicationModule : Module
             .As<ICacheService>()
             .SingleInstance();
 
-        // Future repositories, services, and scorers can be registered here
-        // or through assembly scanning:
-        // builder.RegisterAssemblyTypes(typeof(ApplicationModule).Assembly)
-        //     .Where(t => t.Name.EndsWith("Service") || t.Name.EndsWith("Repository"))
-        //     .AsImplementedInterfaces()
-        //     .InstancePerLifetimeScope();
+        // Register Authentication & Token Services (Scoped per HTTP request)
+        builder.RegisterType<AuthRepository>()
+            .As<IAuthRepository>()
+            .InstancePerLifetimeScope();
+
+        builder.RegisterType<TokenService>()
+            .As<ITokenService>()
+            .InstancePerLifetimeScope();
+
+        builder.RegisterType<AuthService>()
+            .As<IAuthService>()
+            .InstancePerLifetimeScope();
     }
 }

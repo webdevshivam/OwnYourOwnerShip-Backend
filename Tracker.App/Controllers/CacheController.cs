@@ -1,14 +1,16 @@
 using Microsoft.AspNetCore.Mvc;
+using Tracker.App.Common.Constants;
+using Tracker.App.Common.Models;
+using Tracker.App.Common.Routing;
 using Tracker.App.Services;
 
 namespace Tracker.App.Controllers;
 
 /// <summary>
 /// Controller demonstrating how to use Redis caching via ICacheService.
+/// Inherits BaseApiController for consistent route prefixing and ApiResponse envelopes.
 /// </summary>
-[ApiController]
-[Route("api/[controller]")]
-public class CacheController : ControllerBase
+public class CacheController : BaseApiController
 {
     private readonly ICacheService _cacheService;
 
@@ -21,56 +23,64 @@ public class CacheController : ControllerBase
     /// Retrieves a cached value by key.
     /// </summary>
     [HttpGet("{key}")]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(string key)
     {
         var value = await _cacheService.GetAsync<object>(key);
 
         if (value is null)
         {
-            return NotFound(new { message = $"Key '{key}' not found in cache." });
+            return Failure(string.Format(ApiConstants.CacheKeyNotFoundMessage, key), StatusCodes.Status404NotFound);
         }
 
-        return Ok(new { key, value });
+        return Success(new { key, value });
     }
 
     /// <summary>
     /// Saves a key-value pair to Redis with an optional expiration time (in minutes).
     /// </summary>
     [HttpPost]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Set([FromBody] CacheRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Key))
         {
-            return BadRequest(new { message = "Key cannot be empty." });
+            return Failure(ApiConstants.CacheKeyEmptyMessage, StatusCodes.Status400BadRequest);
         }
 
         var expiry = request.ExpiryMinutes.HasValue
             ? TimeSpan.FromMinutes(request.ExpiryMinutes.Value)
-            : TimeSpan.FromMinutes(30); // Default: 30 minutes
+            : TimeSpan.FromMinutes(30);
 
         await _cacheService.SetAsync(request.Key, request.Value, expiry);
 
-        return Ok(new
+        var data = new
         {
-            message = $"Key '{request.Key}' successfully saved to cache.",
+            key = request.Key,
             expiresInMinutes = expiry.TotalMinutes
-        });
+        };
+
+        return Success(data, string.Format(ApiConstants.CacheKeySavedMessage, request.Key));
     }
 
     /// <summary>
     /// Removes a key from Redis cache.
     /// </summary>
     [HttpDelete("{key}")]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(string key)
     {
         var removed = await _cacheService.RemoveAsync(key);
 
         if (!removed)
         {
-            return NotFound(new { message = $"Key '{key}' was not found in cache." });
+            return Failure(string.Format(ApiConstants.CacheKeyNotFoundMessage, key), StatusCodes.Status404NotFound);
         }
 
-        return Ok(new { message = $"Key '{key}' deleted successfully." });
+        return Success<object?>(null, string.Format(ApiConstants.CacheKeyDeletedMessage, key));
     }
 }
 
