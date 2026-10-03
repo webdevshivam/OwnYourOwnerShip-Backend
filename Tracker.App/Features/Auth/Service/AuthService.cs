@@ -113,12 +113,12 @@ public class AuthService : IAuthService
         // 7. Assemble Lightweight Response Payload
         // ---------------------------------------------------------------------
         var response = new LoginResponse(
-            AccessToken: accessToken,
-            TokenType: ApiConstants.BearerScheme,
-            ExpiresInSeconds: _tokenService.GetAccessTokenExpirationSeconds()
+            User: new AuthUserDto(user.Id, user.Email, user.FullName),
+            ExpiresInSeconds: _tokenService.GetAccessTokenExpirationSeconds(),
+            TokenType: ApiConstants.BearerScheme
         );
 
-        return AuthServiceResult.Success(response, rawRefreshToken);
+        return AuthServiceResult.Success(response, accessToken, rawRefreshToken);
     }
 
     /// <inheritdoc />
@@ -149,11 +149,36 @@ public class AuthService : IAuthService
         }
 
         // ---------------------------------------------------------------------
-        // 2. THEFT DEFENSE (Reuse Detection): Old Revoked Token Presented!
+        // 2. THEFT DEFENSE (Reuse Detection with Grace Window): Old Revoked Token Presented!
         // ---------------------------------------------------------------------
         if (existingToken.IsRevoked)
         {
-            _logger.LogWarning("SECURITY ALERT: Revoked refresh token reused by User '{UserId}'. Terminating all sessions! Origin IP: {IpAddress}", existingToken.UserId, ipAddress);
+            // Concurrency / Multiple-Reload Grace Window (30 seconds):
+            // Tolerates rapid browser reloads (F5) or queued in-flight requests without destroying the session.
+            if (existingToken.RevokedAt.HasValue &&
+                DateTimeOffset.UtcNow - existingToken.RevokedAt.Value <= TimeSpan.FromSeconds(30))
+            {
+                _logger.LogInformation("Refresh token re-requested within 30s grace window for User '{UserId}'. Issuing active session without revocation.", existingToken.UserId);
+
+                string graceAccessToken = _tokenService.GenerateAccessToken(existingToken.User);
+                var (graceRawToken, graceTokenEntity) = _tokenService.CreateRefreshToken(existingToken.UserId, ipAddress, deviceInfo);
+
+                var targetToken = (existingToken.ReplacedByToken is not null && !existingToken.ReplacedByToken.IsRevoked)
+                    ? existingToken.ReplacedByToken
+                    : existingToken;
+
+                await _authRepository.RotateRefreshTokenAsync(targetToken, graceTokenEntity, cancellationToken);
+
+                var graceResponse = new LoginResponse(
+                    User: new AuthUserDto(existingToken.User.Id, existingToken.User.Email, existingToken.User.FullName),
+                    ExpiresInSeconds: _tokenService.GetAccessTokenExpirationSeconds(),
+                    TokenType: ApiConstants.BearerScheme
+                );
+
+                return AuthServiceResult.Success(graceResponse, graceAccessToken, graceRawToken);
+            }
+
+            _logger.LogWarning("SECURITY ALERT: Revoked refresh token reused outside grace period by User '{UserId}'. Terminating all sessions! Origin IP: {IpAddress}", existingToken.UserId, ipAddress);
 
             // Invalidate the entire token family for this user
             await _authRepository.RevokeAllUserTokensAsync(existingToken.UserId, cancellationToken);
@@ -193,12 +218,12 @@ public class AuthService : IAuthService
         // 6. Return Clean Response Payload
         // ---------------------------------------------------------------------
         var response = new LoginResponse(
-            AccessToken: newAccessToken,
-            TokenType: ApiConstants.BearerScheme,
-            ExpiresInSeconds: _tokenService.GetAccessTokenExpirationSeconds()
+            User: new AuthUserDto(existingToken.User.Id, existingToken.User.Email, existingToken.User.FullName),
+            ExpiresInSeconds: _tokenService.GetAccessTokenExpirationSeconds(),
+            TokenType: ApiConstants.BearerScheme
         );
 
-        return AuthServiceResult.Success(response, newRawRefreshToken);
+        return AuthServiceResult.Success(response, newAccessToken, newRawRefreshToken);
     }
 
     /// <inheritdoc />

@@ -40,6 +40,7 @@ public class AuthRepository : IAuthRepository
     {
         return await _context.RefreshTokens
             .Include(rt => rt.User)
+            .Include(rt => rt.ReplacedByToken)
             .FirstOrDefaultAsync(rt => rt.TokenHash == tokenHash, cancellationToken);
     }
 

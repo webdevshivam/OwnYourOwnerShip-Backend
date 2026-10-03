@@ -70,9 +70,10 @@ public class AuthController : BaseApiController
 
         // =====================================================================
         // TOKEN MANAGEMENT BEST PRACTICE:
-        // Set Refresh Token in an HttpOnly cookie synchronized with JwtOptions.
-        // This guarantees browser JavaScript (XSS attacks) cannot steal it.
+        // Set both Access Token and Refresh Token in HttpOnly secure cookies.
+        // This guarantees browser JavaScript (XSS attacks) cannot steal them.
         // =====================================================================
+        SetAccessTokenCookie(result.AccessToken!);
         SetRefreshTokenCookie(result.RefreshToken!);
 
         return Success(result.Data, ApiConstants.LoginSuccessMessage);
@@ -84,13 +85,11 @@ public class AuthController : BaseApiController
     /// Route: POST /api/auth/refresh-token
     /// </summary>
     /// <param name="cancellationToken">Cancellation token for aborting the async operation.</param>
-    /// <response code="200">Token successfully rotated. Returns new access token.</response>
-    /// <response code="400">Refresh token cookie is missing.</response>
-    /// <response code="401">Invalid, expired, or compromised/reused refresh token.</response>
+    /// <response code="200">Token successfully rotated. Returns user profile and session metadata.</response>
+    /// <response code="401">Refresh token cookie is missing, invalid, expired, or compromised/reused.</response>
     /// <response code="403">User account is inactive or disabled.</response>
     [HttpPost(ApiConstants.RefreshTokenRoute)]
     [ProducesResponseType(typeof(ApiResponse<LoginResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> RefreshToken(CancellationToken cancellationToken = default)
@@ -99,7 +98,7 @@ public class AuthController : BaseApiController
         if (!Request.Cookies.TryGetValue(ApiConstants.RefreshTokenCookieName, out var refreshToken) ||
             string.IsNullOrWhiteSpace(refreshToken))
         {
-            return Failure(ApiConstants.MissingRefreshTokenMessage, StatusCodes.Status400BadRequest);
+            return Failure(ApiConstants.MissingRefreshTokenMessage, StatusCodes.Status401Unauthorized);
         }
 
         var clientIp = HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -110,12 +109,13 @@ public class AuthController : BaseApiController
 
         if (!result.IsSuccess)
         {
-            // Clear invalid/compromised cookie from the client browser
-            ClearRefreshTokenCookie();
+            // Clear invalid/compromised cookies from the client browser
+            ClearAuthCookies();
             return Failure(result.ErrorMessage!, result.StatusCode);
         }
 
-        // 3. Issue newly rotated refresh token in the HttpOnly cookie
+        // 3. Issue newly minted access token and rotated refresh token in HttpOnly cookies
+        SetAccessTokenCookie(result.AccessToken!);
         SetRefreshTokenCookie(result.RefreshToken!);
 
         return Success(result.Data, ApiConstants.TokenRefreshedMessage);
@@ -123,13 +123,12 @@ public class AuthController : BaseApiController
 
     /// <summary>
     /// Logs out the authenticated user, revokes the refresh token session on the server,
-    /// and deletes the HttpOnly refresh token cookie.
-    /// Requires a valid JWT Bearer token in the Authorization header.
+    /// and deletes both HttpOnly cookies.
     /// Route: POST /api/auth/logout
     /// </summary>
     /// <param name="allDevices">Optional query parameter. If true, revokes all active refresh tokens for the user across all devices.</param>
     /// <param name="cancellationToken">Cancellation token for aborting the async operation.</param>
-    /// <response code="200">Logout successful. Refresh token cookie removed.</response>
+    /// <response code="200">Logout successful. Auth cookies removed.</response>
     /// <response code="401">User is unauthenticated or token is invalid.</response>
     [Authorize]
     [HttpPost(ApiConstants.LogoutRoute)]
@@ -147,8 +146,8 @@ public class AuthController : BaseApiController
 
         Request.Cookies.TryGetValue(ApiConstants.RefreshTokenCookieName, out var refreshToken);
 
-        // Always delete the refresh token cookie from the client browser
-        ClearRefreshTokenCookie();
+        // Always delete both auth cookies from the client browser
+        ClearAuthCookies();
 
         await _authService.LogoutAsync(userId, refreshToken, allDevices, cancellationToken);
 
@@ -158,34 +157,56 @@ public class AuthController : BaseApiController
     }
 
     /// <summary>
-    /// Writes the refresh token into an encrypted, HttpOnly cookie restricted to auth endpoints.
-    /// Expiration is synchronized with JwtOptions configuration.
+    /// Writes the access token into an encrypted, HttpOnly cookie.
+    /// Expiration is synchronized with JwtOptions.AccessTokenExpirationMinutes.
+    /// </summary>
+    private void SetAccessTokenCookie(string accessToken)
+    {
+        var cookieOptions = GetCookieOptions(DateTimeOffset.UtcNow.AddMinutes(_jwtOptions.AccessTokenExpirationMinutes));
+        Response.Cookies.Append(ApiConstants.AccessTokenCookieName, accessToken, cookieOptions);
+    }
+
+    /// <summary>
+    /// Writes the refresh token into an encrypted, HttpOnly cookie.
+    /// Expiration is synchronized with JwtOptions.RefreshTokenExpirationDays.
     /// </summary>
     private void SetRefreshTokenCookie(string refreshToken)
     {
-        var cookieOptions = new CookieOptions
-        {
-            HttpOnly = true,                                                            // Blocks JavaScript access (XSS defense)
-            Secure = Request.IsHttps,                                                   // Requires HTTPS in prod, adapts in local dev
-            SameSite = SameSiteMode.Lax,                                                // Supports cross-origin SPAs while blocking CSRF
-            Path = ApiConstants.AuthCookiePath,                                         // Only sent to authentication endpoints
-            Expires = DateTimeOffset.UtcNow.AddDays(_jwtOptions.RefreshTokenExpirationDays) // Dynamic from appsettings.json
-        };
-
+        var cookieOptions = GetCookieOptions(DateTimeOffset.UtcNow.AddDays(_jwtOptions.RefreshTokenExpirationDays));
         Response.Cookies.Append(ApiConstants.RefreshTokenCookieName, refreshToken, cookieOptions);
     }
 
     /// <summary>
-    /// Clears the refresh token cookie upon security invalidation or logout.
+    /// Standardized cookie options for HTTP / HTTPS localhost development and production environments.
+    /// SameSite=Lax allows localhost same-site dev & protects against CSRF.
     /// </summary>
-    private void ClearRefreshTokenCookie()
+    private CookieOptions GetCookieOptions(DateTimeOffset expires)
     {
-        Response.Cookies.Delete(ApiConstants.RefreshTokenCookieName, new CookieOptions
+        return new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = Request.IsHttps,
+            SameSite = SameSiteMode.Lax,
+            Path = ApiConstants.AuthCookiePath,
+            Expires = expires
+        };
+    }
+
+    /// <summary>
+    /// Clears both auth cookies upon logout or invalidation.
+    /// </summary>
+    private void ClearAuthCookies()
+    {
+        var expiredOptions = new CookieOptions
         {
             Path = ApiConstants.AuthCookiePath,
             Secure = Request.IsHttps,
             HttpOnly = true,
-            SameSite = SameSiteMode.Lax
-        });
+            SameSite = SameSiteMode.Lax,
+            Expires = DateTimeOffset.UnixEpoch
+        };
+
+        Response.Cookies.Delete(ApiConstants.AccessTokenCookieName, expiredOptions);
+        Response.Cookies.Delete(ApiConstants.RefreshTokenCookieName, expiredOptions);
     }
 }

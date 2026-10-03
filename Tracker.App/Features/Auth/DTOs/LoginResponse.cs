@@ -1,15 +1,21 @@
 namespace Tracker.App.Features.Auth.DTOs;
 
 /// <summary>
-/// Minimal, ultra-lightweight authentication response.
-/// Contains only the short-lived JWT Access Token and metadata.
-/// 
-/// Security & Architecture Note:
-/// - RefreshToken is NOT included here; it is delivered exclusively via an HttpOnly secure cookie to block XSS theft.
-/// - Redundant user profile fields are excluded; user identity claims (id, email, name) are already encoded inside the JWT.
+/// User identity summary delivered to the client upon successful authentication.
+/// </summary>
+public record AuthUserDto(
+    Guid Id,
+    string Email,
+    string FullName
+);
+
+/// <summary>
+/// Client authentication response envelope.
+/// Sensitive tokens (both AccessToken and RefreshToken) are delivered strictly via secure HttpOnly cookies.
+/// Contains user profile and session metadata needed by the frontend application.
 /// </summary>
 public record LoginResponse(
-    string AccessToken,
-    string TokenType,
-    int ExpiresInSeconds
+    AuthUserDto User,
+    int ExpiresInSeconds,
+    string TokenType = "Bearer"
 );

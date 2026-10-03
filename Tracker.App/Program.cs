@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Serialization;
 using Autofac;
 using Autofac.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -26,6 +27,11 @@ builder.Host.UseServiceProviderFactory(new AutofacServiceProviderFactory());
 // 2. Framework & ASP.NET Core Services
 // ==========================================
 builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        // Omit null properties/attributes from JSON response payloads
+        options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+    })
     .ConfigureApiBehaviorOptions(options =>
     {
         // Enforce consistent ApiResponse envelope for automatic model validation errors (400 Bad Request)
@@ -50,6 +56,22 @@ builder.Services.AddRouting(options =>
     options.LowercaseQueryStrings = true;
 });
 
+// Configure CORS for Frontend Client
+const string FrontendCorsPolicy = "AllowFrontend";
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? new[] { "http://localhost:4200", "https://localhost:4200" };
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(FrontendCorsPolicy, policy =>
+    {
+        policy.WithOrigins(allowedOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
+
 // Configure JWT Options
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 var jwtSettings = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
@@ -70,6 +92,19 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidAudience = jwtSettings.Audience,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Secret)),
             ClockSkew = TimeSpan.Zero
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                // Check Authorization header first, fallback to HttpOnly accessToken cookie
+                if (string.IsNullOrEmpty(context.Token) &&
+                    context.Request.Cookies.TryGetValue(ApiConstants.AccessTokenCookieName, out var cookieToken))
+                {
+                    context.Token = cookieToken;
+                }
+                return Task.CompletedTask;
+            }
         };
     });
 
@@ -145,6 +180,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// Ensure CORS middleware is placed after Routing and before Auth:
+app.UseRouting();
+app.UseCors(FrontendCorsPolicy);
 
 app.UseAuthentication();
 app.UseAuthorization();

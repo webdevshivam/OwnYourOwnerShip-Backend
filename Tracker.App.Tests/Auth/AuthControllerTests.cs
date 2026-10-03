@@ -55,8 +55,9 @@ public class AuthControllerTests
     {
         // Arrange
         var request = new LoginRequest("test@example.com", "Password123!");
-        var loginResponse = new LoginResponse("access_jwt_token", ApiConstants.BearerScheme, 900);
-        var serviceResult = AuthServiceResult.Success(loginResponse, "raw_refresh_token_64_characters");
+        var userDto = new AuthUserDto(Guid.NewGuid(), "test@example.com", "Test User");
+        var loginResponse = new LoginResponse(userDto, 900, ApiConstants.BearerScheme);
+        var serviceResult = AuthServiceResult.Success(loginResponse, "access_jwt_token", "raw_refresh_token_64_characters");
 
         _authServiceMock
             .Setup(s => s.LoginAsync(request, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -73,12 +74,14 @@ public class AuthControllerTests
         var apiResponse = okResult.Value as ApiResponse<LoginResponse>;
         apiResponse.Should().NotBeNull();
         apiResponse!.Success.Should().BeTrue();
-        apiResponse.Data!.AccessToken.Should().Be("access_jwt_token");
+        apiResponse.Data!.User.Email.Should().Be("test@example.com");
 
-        // Verify Set-Cookie header contains HttpOnly and SameSite
-        var setCookieHeader = _httpContext.Response.Headers.SetCookie.ToString();
-        setCookieHeader.Should().Contain(ApiConstants.RefreshTokenCookieName);
+        // Verify Set-Cookie headers contain both accessToken and refreshToken with HttpOnly and Path=/
+        var setCookieHeader = _httpContext.Response.Headers.SetCookie.ToString().ToLowerInvariant();
+        setCookieHeader.Should().Contain(ApiConstants.AccessTokenCookieName.ToLowerInvariant());
+        setCookieHeader.Should().Contain(ApiConstants.RefreshTokenCookieName.ToLowerInvariant());
         setCookieHeader.Should().Contain("httponly");
+        setCookieHeader.Should().Contain("path=/");
     }
 
     [Fact]
@@ -107,7 +110,7 @@ public class AuthControllerTests
     }
 
     [Fact]
-    public async Task RefreshToken_ShouldReturn400BadRequest_WhenCookieIsMissing()
+    public async Task RefreshToken_ShouldReturn401Unauthorized_WhenCookieIsMissing()
     {
         // Arrange: No cookie set on HttpContext
 
@@ -117,7 +120,7 @@ public class AuthControllerTests
         // Assert
         var statusResult = actionResult as ObjectResult;
         statusResult.Should().NotBeNull();
-        statusResult!.StatusCode.Should().Be(400);
+        statusResult!.StatusCode.Should().Be(401);
 
         var apiResponse = statusResult.Value as ApiResponse;
         apiResponse.Should().NotBeNull();
@@ -131,8 +134,9 @@ public class AuthControllerTests
         // Arrange: Attach refreshToken cookie
         _httpContext.Request.Headers.Cookie = $"{ApiConstants.RefreshTokenCookieName}=existing_raw_token";
 
-        var loginResponse = new LoginResponse("new_access_token", ApiConstants.BearerScheme, 900);
-        var serviceResult = AuthServiceResult.Success(loginResponse, "new_rotated_refresh_token");
+        var userDto = new AuthUserDto(Guid.NewGuid(), "test@example.com", "Test User");
+        var loginResponse = new LoginResponse(userDto, 900, ApiConstants.BearerScheme);
+        var serviceResult = AuthServiceResult.Success(loginResponse, "new_access_token", "new_rotated_refresh_token");
 
         _authServiceMock
             .Setup(s => s.RefreshTokenAsync("existing_raw_token", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -149,12 +153,14 @@ public class AuthControllerTests
         var apiResponse = okResult.Value as ApiResponse<LoginResponse>;
         apiResponse.Should().NotBeNull();
         apiResponse!.Success.Should().BeTrue();
-        apiResponse.Data!.AccessToken.Should().Be("new_access_token");
+        apiResponse.Data!.User.Email.Should().Be("test@example.com");
 
-        // Verify Set-Cookie has the newly rotated token
-        var setCookieHeader = _httpContext.Response.Headers.SetCookie.ToString();
-        setCookieHeader.Should().Contain("new_rotated_refresh_token");
+        // Verify Set-Cookie has the newly rotated token and required security flags
+        var setCookieHeader = _httpContext.Response.Headers.SetCookie.ToString().ToLowerInvariant();
+        setCookieHeader.Should().Contain(ApiConstants.AccessTokenCookieName.ToLowerInvariant());
+        setCookieHeader.Should().Contain(ApiConstants.RefreshTokenCookieName.ToLowerInvariant());
         setCookieHeader.Should().Contain("httponly");
+        setCookieHeader.Should().Contain("path=/");
     }
 
     [Fact]
@@ -182,10 +188,13 @@ public class AuthControllerTests
         apiResponse!.Success.Should().BeFalse();
         apiResponse.Message.Should().Be(ApiConstants.CompromisedTokenMessage);
 
-        // Verify cookie is deleted/expired
-        var setCookieHeader = _httpContext.Response.Headers.SetCookie.ToString();
-        setCookieHeader.Should().Contain(ApiConstants.RefreshTokenCookieName);
+        // Verify cookies are deleted/expired with matching security flags
+        var setCookieHeader = _httpContext.Response.Headers.SetCookie.ToString().ToLowerInvariant();
+        setCookieHeader.Should().Contain(ApiConstants.AccessTokenCookieName.ToLowerInvariant());
+        setCookieHeader.Should().Contain(ApiConstants.RefreshTokenCookieName.ToLowerInvariant());
         setCookieHeader.Should().Contain("expires=");
+        setCookieHeader.Should().Contain("samesite=lax");
+        setCookieHeader.Should().Contain("path=/");
     }
 
     [Fact]
@@ -215,10 +224,13 @@ public class AuthControllerTests
         apiResponse!.Success.Should().BeTrue();
         apiResponse.Message.Should().Be(ApiConstants.LogoutSuccessMessage);
 
-        // Verify cookie was cleared
-        var setCookieHeader = _httpContext.Response.Headers.SetCookie.ToString();
-        setCookieHeader.Should().Contain(ApiConstants.RefreshTokenCookieName);
+        // Verify cookies were cleared with matching security flags
+        var setCookieHeader = _httpContext.Response.Headers.SetCookie.ToString().ToLowerInvariant();
+        setCookieHeader.Should().Contain(ApiConstants.AccessTokenCookieName.ToLowerInvariant());
+        setCookieHeader.Should().Contain(ApiConstants.RefreshTokenCookieName.ToLowerInvariant());
         setCookieHeader.Should().Contain("expires=");
+        setCookieHeader.Should().Contain("samesite=lax");
+        setCookieHeader.Should().Contain("path=/");
     }
 
     [Fact]

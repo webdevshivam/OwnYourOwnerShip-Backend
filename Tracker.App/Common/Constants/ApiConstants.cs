@@ -26,8 +26,9 @@ public static class ApiConstants
     public const string CompromisedTokenMessage = "Compromised token detected. All active sessions have been terminated for security.";
     
     public const string BearerScheme = "Bearer";
+    public const string AccessTokenCookieName = "accessToken";
     public const string RefreshTokenCookieName = "refreshToken";
-    public const string AuthCookiePath = "/api/auth";
+    public const string AuthCookiePath = "/";
     public const string AuthRoutePrefix = "auth";
     public const string LoginRoute = "login";
     public const string RefreshTokenRoute = "refresh-token";

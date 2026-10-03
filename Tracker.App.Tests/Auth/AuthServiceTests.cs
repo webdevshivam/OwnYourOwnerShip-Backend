@@ -76,9 +76,11 @@ public class AuthServiceTests
         // Assert
         result.IsSuccess.Should().BeTrue();
         result.Data.Should().NotBeNull();
-        result.Data!.AccessToken.Should().Be("mock.jwt.token");
+        result.Data!.User.Email.Should().Be(user.Email);
+        result.Data.User.FullName.Should().Be(user.FullName);
         result.Data.TokenType.Should().Be(ApiConstants.BearerScheme);
         result.Data.ExpiresInSeconds.Should().Be(900);
+        result.AccessToken.Should().Be("mock.jwt.token");
         result.RefreshToken.Should().Be("raw_refresh_token_64chars");
 
         _authRepositoryMock.Verify(r => r.RecordSuccessfulLoginAsync(user.Id, It.IsAny<CancellationToken>()), Times.Once);
@@ -230,7 +232,9 @@ public class AuthServiceTests
 
         // Assert
         result.IsSuccess.Should().BeTrue();
-        result.Data!.AccessToken.Should().Be("new.jwt.access.token");
+        result.Data.Should().NotBeNull();
+        result.Data!.User.Email.Should().Be(user.Email);
+        result.AccessToken.Should().Be("new.jwt.access.token");
         result.RefreshToken.Should().Be("new_rotated_raw_token");
 
         _authRepositoryMock.Verify(r => r.RotateRefreshTokenAsync(existingToken, newRefreshTokenEntity, It.IsAny<CancellationToken>()), Times.Once);
